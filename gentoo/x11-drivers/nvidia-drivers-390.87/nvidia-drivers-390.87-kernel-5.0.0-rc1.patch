@@ -1,147 +1,47 @@
 diff -aru orig/kernel/nvidia/nvlink_linux.c new/kernel/nvidia/nvlink_linux.c
 --- orig/kernel/nvidia/nvlink_linux.c	2018-08-21 19:55:30.000000000 -0500
-+++ new/kernel/nvidia/nvlink_linux.c	2019-01-10 22:47:09.098630146 -0600
-@@ -566,8 +566,11 @@
-     unsigned long jiffies;
-     unsigned long mdelay_safe_msec;
-     struct timeval tm_end, tm_aux;
-+    struct timespec64 tm_aux_new;
++++ new/kernel/nvidia/nvlink_linux.c	2019-01-11 16:04:20.909784568 -0600
+@@ -49,6 +49,13 @@
+ #include <linux/string.h>
+ #include <linux/mutex.h>
  
--    do_gettimeofday(&tm_aux);
-+    efi_gettimeofday(&tm_aux_new);
-+    tm_aux.tv_sec = tm_aux_new.tv_sec;
-+    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
- 
-     if (in_irq() && (ms > NV_MAX_ISR_DELAY_MS))
-     {
-@@ -600,7 +603,10 @@
-         do
++#define do_gettimeofday(x) do { \
++    struct timespec64 t; \
++    efi_gettimeofday(&t); \
++    (x)->tv_sec = t.tv_sec; \
++    (x)->tv_usec = t.tv_nsec / 1000; \
++} while (0)
++
+ typedef struct
+ {
+     struct mutex    lock;
+@@ -601,6 +608,7 @@
          {
              schedule_timeout(jiffies);
--            do_gettimeofday(&tm_aux);
-+            efi_gettimeofday(&tm_aux_new);
-+            tm_aux.tv_sec = tm_aux_new.tv_sec;
-+            tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
+             do_gettimeofday(&tm_aux);
 +
              if (nv_timer_less_than(&tm_aux, &tm_end))
              {
                  nv_timersub(&tm_end, &tm_aux, &tm_aux);
 diff -aru orig/kernel/nvidia/os-interface.c new/kernel/nvidia/os-interface.c
 --- orig/kernel/nvidia/os-interface.c	2018-08-21 19:55:22.000000000 -0500
-+++ new/kernel/nvidia/os-interface.c	2019-01-10 22:47:09.098630146 -0600
-@@ -430,8 +430,11 @@
- )
- {
-     struct timeval tm;
-+    struct timespec64 tv_new;
++++ new/kernel/nvidia/os-interface.c	2019-01-11 16:04:51.159784459 -0600
+@@ -17,6 +17,15 @@
+ #include "nv-gpu-numa.h"
  
--    do_gettimeofday(&tm);
-+    efi_gettimeofday(&tv_new);
-+    tm.tv_sec = tv_new.tv_sec;
-+    tm.tv_usec = tv_new.tv_nsec / 1000;
- 
-     *seconds = tm.tv_sec;
-     *useconds = tm.tv_usec;
-@@ -502,8 +505,12 @@
- 
- #ifdef NV_CHECK_DELAY_ACCURACY
-     struct timeval tm1, tm2;
-+    struct timespec64 tm1_new, tm2_new;
+ #define MAX_ERROR_STRING 512
 +
-+    efi_gettimeofday(&tm1_new);
-+    tm1.tv_sec = tm1_new.tv_sec;
-+    tm1.tv_usec = tm1_new.tv_nsec / 1000;
- 
--    do_gettimeofday(&tm1);
- #endif
- 
-     if (in_irq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
-@@ -518,9 +525,12 @@
-         udelay(usec);
- 
- #ifdef NV_CHECK_DELAY_ACCURACY
--    do_gettimeofday(&tm2);
-+    efi_gettimeofday(&tm2_new);
-+    tm2.tv_sec = tm2_new.tv_sec;
-+    tm2.tv_usec = tm2_new.tv_nsec / 1000;
++#define do_gettimeofday(x) do { \
++    struct timespec64 t; \
++    efi_gettimeofday(&t); \
++    (x)->tv_sec = t.tv_sec; \
++    (x)->tv_usec = t.tv_nsec / 1000; \
++} while (0);
 +
-     nv_printf(NV_DBG_ERRORS, "NVRM: osDelayUs %d: 0x%x 0x%x\n",
--        MicroSeconds, tm2.tv_sec - tm1.tv_sec, tm2.tv_usec - tm1.tv_usec);
-+        MicroSeconds, tm2.tv_sec - tm1.tv_sec, tm2.tv_usec - tm1.tv_usec );
- #endif
- 
-     return NV_OK;
-@@ -542,11 +552,16 @@
-     unsigned long jiffies;
-     unsigned long mdelay_safe_msec;
-     struct timeval tm_end, tm_aux;
-+    struct timespec64 tm_aux_new;
 +
- #ifdef NV_CHECK_DELAY_ACCURACY
-     struct timeval tm_start;
- #endif
+ static char nv_error_string[MAX_ERROR_STRING];
+ nv_spinlock_t nv_error_string_lock;
  
--    do_gettimeofday(&tm_aux);
-+    efi_gettimeofday(&tm_aux_new);
-+    tm_aux.tv_sec = tm_aux_new.tv_sec;
-+    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
-+
- #ifdef NV_CHECK_DELAY_ACCURACY
-     tm_start = tm_aux;
- #endif
-@@ -580,8 +595,10 @@
-         do
-         {
-             schedule_timeout(jiffies);
--            do_gettimeofday(&tm_aux);
--            if (NV_TIMERCMP(&tm_aux, &tm_end, <))
-+            efi_gettimeofday(&tm_aux_new);
-+            tm_aux.tv_sec = tm_aux_new.tv_sec;
-+            tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
-+           if (NV_TIMERCMP(&tm_aux, &tm_end, <))
-             {
-                 NV_TIMERSUB(&tm_end, &tm_aux, &tm_aux);
-                 MicroSeconds = tm_aux.tv_usec + tm_aux.tv_sec * 1000000;
-@@ -602,7 +619,10 @@
-         udelay(MicroSeconds);
-     }
- #ifdef NV_CHECK_DELAY_ACCURACY
--    do_gettimeofday(&tm_aux);
-+    efi_gettimeofday(&tm_aux_new);
-+    tm_aux.tv_sec = tm_aux_new.tv_sec;
-+    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
-+
-     timersub(&tm_aux, &tm_start, &tm_aux);
-     nv_printf(NV_DBG_ERRORS, "NVRM: osDelay %dmsec: %d.%06dsec\n",
-         MilliSeconds, tm_aux.tv_sec, tm_aux.tv_usec);
-@@ -1926,9 +1946,13 @@
-     struct ipmi_recv_msg    *rx_msg;
-     int                     err_no;
-     struct timeval          tv;
-+    struct timespec64       tv_new;
-     NvU64                   start_time;
- 
--    do_gettimeofday(&tv);
-+    efi_gettimeofday(&tv_new);
-+    tv.tv_sec = tv_new.tv_sec;
-+    tv.tv_usec = tv_new.tv_nsec / 1000;
-+
-     start_time = NV_TIMEVAL_TO_US(tv);
- 
-     err_no = -EAGAIN;
-@@ -1953,8 +1977,10 @@
- 
-         spin_unlock_irqrestore(&p_priv->msg_lock, flags);
-         os_delay(NV_IPMI_SLEEP_MS);
--        do_gettimeofday(&tv);
--    } while (NV_TIMEVAL_TO_US(tv) < (start_time + NV_IPMI_READ_TIMEOUT_US));
-+        efi_gettimeofday(&tv_new);
-+        tv.tv_sec = tv_new.tv_sec;
-+        tv.tv_usec = tv_new.tv_nsec / 1000;
-+   } while (NV_TIMEVAL_TO_US(tv) < (start_time + NV_IPMI_READ_TIMEOUT_US));
- 
-     if (rx_msg != NULL)
-     {
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-connector.c new/kernel/nvidia-drm/nvidia-drm-connector.c
 --- orig/kernel/nvidia-drm/nvidia-drm-connector.c	2018-08-21 19:55:29.000000000 -0500
 +++ new/kernel/nvidia-drm/nvidia-drm-connector.c	2019-01-10 22:47:09.098630146 -0600
