@@ -1,6 +1,6 @@
 diff -aru orig/kernel/nvidia/nvlink_linux.c new/kernel/nvidia/nvlink_linux.c
 --- orig/kernel/nvidia/nvlink_linux.c	2018-08-21 19:55:30.000000000 -0500
-+++ new/kernel/nvidia/nvlink_linux.c	2019-01-11 16:04:20.909784568 -0600
++++ new/kernel/nvidia/nvlink_linux.c	2019-01-11 16:23:53.019780356 -0600
 @@ -49,6 +49,13 @@
  #include <linux/string.h>
  #include <linux/mutex.h>
@@ -15,17 +15,9 @@ diff -aru orig/kernel/nvidia/nvlink_linux.c new/kernel/nvidia/nvlink_linux.c
  typedef struct
  {
      struct mutex    lock;
-@@ -601,6 +608,7 @@
-         {
-             schedule_timeout(jiffies);
-             do_gettimeofday(&tm_aux);
-+
-             if (nv_timer_less_than(&tm_aux, &tm_end))
-             {
-                 nv_timersub(&tm_end, &tm_aux, &tm_aux);
 diff -aru orig/kernel/nvidia/os-interface.c new/kernel/nvidia/os-interface.c
 --- orig/kernel/nvidia/os-interface.c	2018-08-21 19:55:22.000000000 -0500
-+++ new/kernel/nvidia/os-interface.c	2019-01-11 16:04:51.159784459 -0600
++++ new/kernel/nvidia/os-interface.c	2019-01-11 16:12:44.319782759 -0600
 @@ -17,6 +17,15 @@
  #include "nv-gpu-numa.h"
  
@@ -44,7 +36,7 @@ diff -aru orig/kernel/nvidia/os-interface.c new/kernel/nvidia/os-interface.c
  
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-connector.c new/kernel/nvidia-drm/nvidia-drm-connector.c
 --- orig/kernel/nvidia-drm/nvidia-drm-connector.c	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-connector.c	2019-01-10 22:47:09.098630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-connector.c	2019-01-11 16:12:44.319782759 -0600
 @@ -226,7 +226,7 @@
  
  
@@ -56,7 +48,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-connector.c new/kernel/nvidia-drm/nv
  
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-encoder.c new/kernel/nvidia-drm/nvidia-drm-encoder.c
 --- orig/kernel/nvidia-drm/nvidia-drm-encoder.c	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-encoder.c	2019-01-10 22:47:09.098630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-encoder.c	2019-01-11 16:12:44.319782759 -0600
 @@ -216,7 +216,7 @@
  
      /* Attach encoder and connector */
@@ -68,7 +60,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-encoder.c new/kernel/nvidia-drm/nvid
          NV_DRM_DEV_LOG_ERR(
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c new/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
 --- orig/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c	2019-01-10 22:47:09.098630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c	2019-01-11 16:12:44.319782759 -0600
 @@ -237,7 +237,7 @@
  
      page_offset = vmf->pgoff - drm_vma_node_start(&gem->vma_node);
@@ -80,7 +72,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c new/kernel/nvidia
          case 0:
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem.h new/kernel/nvidia-drm/nvidia-drm-gem.h
 --- orig/kernel/nvidia-drm/nvidia-drm-gem.h	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-gem.h	2019-01-10 22:47:09.108630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-gem.h	2019-01-11 16:12:44.319782759 -0600
 @@ -79,7 +79,7 @@
  
      /* drop reference from allocate - handle holds it now */
@@ -108,7 +100,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem.h new/kernel/nvidia-drm/nvidia-d
  static inline int nv_drm_gem_handle_create(struct drm_file *filp,
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.c new/kernel/nvidia-drm/nvidia-drm-helper.c
 --- orig/kernel/nvidia-drm/nvidia-drm-helper.c	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-helper.c	2019-01-10 22:47:09.108630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-helper.c	2019-01-11 16:12:44.319782759 -0600
 @@ -149,12 +149,12 @@
          if (ret == 0) {
              struct drm_framebuffer *new_fb = plane->state->fb;
@@ -126,7 +118,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.c new/kernel/nvidia-drm/nvidi
     }
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.h new/kernel/nvidia-drm/nvidia-drm-helper.h
 --- orig/kernel/nvidia-drm/nvidia-drm-helper.h	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-helper.h	2019-01-10 22:47:09.108630146 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-helper.h	2019-01-11 16:12:44.319782759 -0600
 @@ -37,9 +37,9 @@
  static inline void nv_drm_dev_free(struct drm_device *dev)
  {
@@ -141,7 +133,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.h new/kernel/nvidia-drm/nvidi
  
 diff -aru orig/kernel/nvidia-drm/nvidia-drm-linux.c new/kernel/nvidia-drm/nvidia-drm-linux.c
 --- orig/kernel/nvidia-drm/nvidia-drm-linux.c	2018-08-21 19:55:30.000000000 -0500
-+++ new/kernel/nvidia-drm/nvidia-drm-linux.c	2019-01-10 23:35:48.679997712 -0600
++++ new/kernel/nvidia-drm/nvidia-drm-linux.c	2019-01-11 16:12:44.319782759 -0600
 @@ -23,7 +23,7 @@
  #include <linux/module.h>
  #include <linux/slab.h>
@@ -166,7 +158,7 @@ diff -aru orig/kernel/nvidia-drm/nvidia-drm-linux.c new/kernel/nvidia-drm/nvidia
  }
 diff -aru orig/kernel/nvidia-modeset/nvidia-modeset-linux.c new/kernel/nvidia-modeset/nvidia-modeset-linux.c
 --- orig/kernel/nvidia-modeset/nvidia-modeset-linux.c	2018-08-21 19:55:29.000000000 -0500
-+++ new/kernel/nvidia-modeset/nvidia-modeset-linux.c	2019-01-10 22:47:09.108630146 -0600
++++ new/kernel/nvidia-modeset/nvidia-modeset-linux.c	2019-01-11 16:12:44.319782759 -0600
 @@ -20,6 +20,7 @@
  #include <linux/random.h>
  #include <linux/file.h>
