@@ -1,0 +1,290 @@
+diff -aru orig/kernel/nvidia/nvlink_linux.c new/kernel/nvidia/nvlink_linux.c
+--- orig/kernel/nvidia/nvlink_linux.c	2018-08-21 19:55:30.000000000 -0500
++++ new/kernel/nvidia/nvlink_linux.c	2019-01-10 22:47:09.098630146 -0600
+@@ -566,8 +566,11 @@
+     unsigned long jiffies;
+     unsigned long mdelay_safe_msec;
+     struct timeval tm_end, tm_aux;
++    struct timespec64 tm_aux_new;
+ 
+-    do_gettimeofday(&tm_aux);
++    efi_gettimeofday(&tm_aux_new);
++    tm_aux.tv_sec = tm_aux_new.tv_sec;
++    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
+ 
+     if (in_irq() && (ms > NV_MAX_ISR_DELAY_MS))
+     {
+@@ -600,7 +603,10 @@
+         do
+         {
+             schedule_timeout(jiffies);
+-            do_gettimeofday(&tm_aux);
++            efi_gettimeofday(&tm_aux_new);
++            tm_aux.tv_sec = tm_aux_new.tv_sec;
++            tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
++
+             if (nv_timer_less_than(&tm_aux, &tm_end))
+             {
+                 nv_timersub(&tm_end, &tm_aux, &tm_aux);
+diff -aru orig/kernel/nvidia/os-interface.c new/kernel/nvidia/os-interface.c
+--- orig/kernel/nvidia/os-interface.c	2018-08-21 19:55:22.000000000 -0500
++++ new/kernel/nvidia/os-interface.c	2019-01-10 22:47:09.098630146 -0600
+@@ -430,8 +430,11 @@
+ )
+ {
+     struct timeval tm;
++    struct timespec64 tv_new;
+ 
+-    do_gettimeofday(&tm);
++    efi_gettimeofday(&tv_new);
++    tm.tv_sec = tv_new.tv_sec;
++    tm.tv_usec = tv_new.tv_nsec / 1000;
+ 
+     *seconds = tm.tv_sec;
+     *useconds = tm.tv_usec;
+@@ -502,8 +505,12 @@
+ 
+ #ifdef NV_CHECK_DELAY_ACCURACY
+     struct timeval tm1, tm2;
++    struct timespec64 tm1_new, tm2_new;
++
++    efi_gettimeofday(&tm1_new);
++    tm1.tv_sec = tm1_new.tv_sec;
++    tm1.tv_usec = tm1_new.tv_nsec / 1000;
+ 
+-    do_gettimeofday(&tm1);
+ #endif
+ 
+     if (in_irq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
+@@ -518,9 +525,12 @@
+         udelay(usec);
+ 
+ #ifdef NV_CHECK_DELAY_ACCURACY
+-    do_gettimeofday(&tm2);
++    efi_gettimeofday(&tm2_new);
++    tm2.tv_sec = tm2_new.tv_sec;
++    tm2.tv_usec = tm2_new.tv_nsec / 1000;
++
+     nv_printf(NV_DBG_ERRORS, "NVRM: osDelayUs %d: 0x%x 0x%x\n",
+-        MicroSeconds, tm2.tv_sec - tm1.tv_sec, tm2.tv_usec - tm1.tv_usec);
++        MicroSeconds, tm2.tv_sec - tm1.tv_sec, tm2.tv_usec - tm1.tv_usec );
+ #endif
+ 
+     return NV_OK;
+@@ -542,11 +552,16 @@
+     unsigned long jiffies;
+     unsigned long mdelay_safe_msec;
+     struct timeval tm_end, tm_aux;
++    struct timespec64 tm_aux_new;
++
+ #ifdef NV_CHECK_DELAY_ACCURACY
+     struct timeval tm_start;
+ #endif
+ 
+-    do_gettimeofday(&tm_aux);
++    efi_gettimeofday(&tm_aux_new);
++    tm_aux.tv_sec = tm_aux_new.tv_sec;
++    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
++
+ #ifdef NV_CHECK_DELAY_ACCURACY
+     tm_start = tm_aux;
+ #endif
+@@ -580,8 +595,10 @@
+         do
+         {
+             schedule_timeout(jiffies);
+-            do_gettimeofday(&tm_aux);
+-            if (NV_TIMERCMP(&tm_aux, &tm_end, <))
++            efi_gettimeofday(&tm_aux_new);
++            tm_aux.tv_sec = tm_aux_new.tv_sec;
++            tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
++           if (NV_TIMERCMP(&tm_aux, &tm_end, <))
+             {
+                 NV_TIMERSUB(&tm_end, &tm_aux, &tm_aux);
+                 MicroSeconds = tm_aux.tv_usec + tm_aux.tv_sec * 1000000;
+@@ -602,7 +619,10 @@
+         udelay(MicroSeconds);
+     }
+ #ifdef NV_CHECK_DELAY_ACCURACY
+-    do_gettimeofday(&tm_aux);
++    efi_gettimeofday(&tm_aux_new);
++    tm_aux.tv_sec = tm_aux_new.tv_sec;
++    tm_aux.tv_usec = tm_aux_new.tv_nsec / 1000;
++
+     timersub(&tm_aux, &tm_start, &tm_aux);
+     nv_printf(NV_DBG_ERRORS, "NVRM: osDelay %dmsec: %d.%06dsec\n",
+         MilliSeconds, tm_aux.tv_sec, tm_aux.tv_usec);
+@@ -1926,9 +1946,13 @@
+     struct ipmi_recv_msg    *rx_msg;
+     int                     err_no;
+     struct timeval          tv;
++    struct timespec64       tv_new;
+     NvU64                   start_time;
+ 
+-    do_gettimeofday(&tv);
++    efi_gettimeofday(&tv_new);
++    tv.tv_sec = tv_new.tv_sec;
++    tv.tv_usec = tv_new.tv_nsec / 1000;
++
+     start_time = NV_TIMEVAL_TO_US(tv);
+ 
+     err_no = -EAGAIN;
+@@ -1953,8 +1977,10 @@
+ 
+         spin_unlock_irqrestore(&p_priv->msg_lock, flags);
+         os_delay(NV_IPMI_SLEEP_MS);
+-        do_gettimeofday(&tv);
+-    } while (NV_TIMEVAL_TO_US(tv) < (start_time + NV_IPMI_READ_TIMEOUT_US));
++        efi_gettimeofday(&tv_new);
++        tv.tv_sec = tv_new.tv_sec;
++        tv.tv_usec = tv_new.tv_nsec / 1000;
++   } while (NV_TIMEVAL_TO_US(tv) < (start_time + NV_IPMI_READ_TIMEOUT_US));
+ 
+     if (rx_msg != NULL)
+     {
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-connector.c new/kernel/nvidia-drm/nvidia-drm-connector.c
+--- orig/kernel/nvidia-drm/nvidia-drm-connector.c	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-connector.c	2019-01-10 22:47:09.098630146 -0600
+@@ -226,7 +226,7 @@
+ 
+ 
+     if (nv_connector->edid != NULL) {
+-        drm_mode_connector_update_edid_property(
++        drm_connector_update_edid_property(
+             connector, nv_connector->edid);
+     }
+ 
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-encoder.c new/kernel/nvidia-drm/nvidia-drm-encoder.c
+--- orig/kernel/nvidia-drm/nvidia-drm-encoder.c	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-encoder.c	2019-01-10 22:47:09.098630146 -0600
+@@ -216,7 +216,7 @@
+ 
+     /* Attach encoder and connector */
+ 
+-    ret = drm_mode_connector_attach_encoder(connector, encoder);
++    ret = drm_connector_attach_encoder(connector, encoder);
+ 
+     if (ret != 0) {
+         NV_DRM_DEV_LOG_ERR(
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c new/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+--- orig/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-gem-nvkms-memory.c	2019-01-10 22:47:09.098630146 -0600
+@@ -237,7 +237,7 @@
+ 
+     page_offset = vmf->pgoff - drm_vma_node_start(&gem->vma_node);
+ 
+-    ret = vm_insert_pfn(vma, address, pfn + page_offset);
++    ret = vmf_insert_pfn(vma, address, pfn + page_offset);
+ 
+     switch (ret) {
+         case 0:
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-gem.h new/kernel/nvidia-drm/nvidia-drm-gem.h
+--- orig/kernel/nvidia-drm/nvidia-drm-gem.h	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-gem.h	2019-01-10 22:47:09.108630146 -0600
+@@ -79,7 +79,7 @@
+ 
+     /* drop reference from allocate - handle holds it now */
+ 
+-    drm_gem_object_unreference_unlocked(&nv_gem->base);
++    drm_gem_object_put_unlocked(&nv_gem->base);
+ 
+     return ret;
+ }
+@@ -153,13 +153,13 @@
+ static inline void
+ nv_drm_gem_object_unreference_unlocked(struct nv_drm_gem_object *nv_gem)
+ {
+-    drm_gem_object_unreference_unlocked(&nv_gem->base);
++    drm_gem_object_put_unlocked(&nv_gem->base);
+ }
+ 
+ static inline void
+ nv_drm_gem_object_unreference(struct nv_drm_gem_object *nv_gem)
+ {
+-    drm_gem_object_unreference(&nv_gem->base);
++    drm_gem_object_put(&nv_gem->base);
+ }
+ 
+ static inline int nv_drm_gem_handle_create(struct drm_file *filp,
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.c new/kernel/nvidia-drm/nvidia-drm-helper.c
+--- orig/kernel/nvidia-drm/nvidia-drm-helper.c	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-helper.c	2019-01-10 22:47:09.108630146 -0600
+@@ -149,12 +149,12 @@
+         if (ret == 0) {
+             struct drm_framebuffer *new_fb = plane->state->fb;
+             if (new_fb)
+-                drm_framebuffer_reference(new_fb);
++                drm_framebuffer_get(new_fb);
+             plane->fb = new_fb;
+             plane->crtc = plane->state->crtc;
+ 
+             if (plane->old_fb)
+-                drm_framebuffer_unreference(plane->old_fb);
++                drm_framebuffer_put(plane->old_fb);
+        }
+        plane->old_fb = NULL;
+    }
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-helper.h new/kernel/nvidia-drm/nvidia-drm-helper.h
+--- orig/kernel/nvidia-drm/nvidia-drm-helper.h	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-helper.h	2019-01-10 22:47:09.108630146 -0600
+@@ -37,9 +37,9 @@
+ static inline void nv_drm_dev_free(struct drm_device *dev)
+ {
+ #if defined(NV_DRM_DEV_UNREF_PRESENT)
+-    drm_dev_unref(dev);
++    drm_dev_put(dev);
+ #else
+-    drm_dev_free(dev);
++    drm_dev_put(dev);
+ #endif
+ }
+ 
+diff -aru orig/kernel/nvidia-drm/nvidia-drm-linux.c new/kernel/nvidia-drm/nvidia-drm-linux.c
+--- orig/kernel/nvidia-drm/nvidia-drm-linux.c	2018-08-21 19:55:30.000000000 -0500
++++ new/kernel/nvidia-drm/nvidia-drm-linux.c	2019-01-10 23:35:48.679997712 -0600
+@@ -23,7 +23,7 @@
+ #include <linux/module.h>
+ #include <linux/slab.h>
+ #include <linux/err.h>
+-
++#include <linux/efi.h>
+ #include "nvidia-drm-os-interface.h"
+ #include "nvidia-drm.h"
+ 
+@@ -152,8 +152,11 @@
+ uint64_t nv_drm_get_time_usec(void)
+ {
+     struct timeval tv;
++    struct timespec64 tv_new;
+ 
+-    do_gettimeofday(&tv);
++    efi_gettimeofday(&tv_new);
++    tv.tv_sec = tv_new.tv_sec;
++    tv.tv_usec = tv_new.tv_nsec / 1000;
+ 
+     return (((uint64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
+ }
+diff -aru orig/kernel/nvidia-modeset/nvidia-modeset-linux.c new/kernel/nvidia-modeset/nvidia-modeset-linux.c
+--- orig/kernel/nvidia-modeset/nvidia-modeset-linux.c	2018-08-21 19:55:29.000000000 -0500
++++ new/kernel/nvidia-modeset/nvidia-modeset-linux.c	2019-01-10 22:47:09.108630146 -0600
+@@ -20,6 +20,7 @@
+ #include <linux/random.h>
+ #include <linux/file.h>
+ #include <linux/list.h>
++#include <linux/efi.h>
+ 
+ #include "nvstatus.h"
+ 
+@@ -211,8 +212,11 @@
+ NvU64 NVKMS_API_CALL nvkms_get_usec(void)
+ {
+     struct timeval tv;
++    struct timespec64 tv_new;
+ 
+-    do_gettimeofday(&tv);
++    efi_gettimeofday(&tv_new);
++    tv.tv_sec = tv_new.tv_sec;
++    tv.tv_usec = tv_new.tv_nsec / 1000;
+ 
+     return (((NvU64)tv.tv_sec) * 1000000) + tv.tv_usec;
+ }
