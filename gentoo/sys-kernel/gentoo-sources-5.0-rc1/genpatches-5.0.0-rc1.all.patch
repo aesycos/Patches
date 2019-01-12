@@ -1,0 +1,991 @@
+From: Anthony G. Basile <blueness@gentoo.org>
+
+This patch adds support for a restricted user-controlled namespace on
+tmpfs filesystem used to house PaX flags.  The namespace must be of the
+form user.pax.* and its value cannot exceed a size of 8 bytes.
+
+This is needed even on all Gentoo systems so that XATTR_PAX flags
+are preserved for users who might build packages using portage on
+a tmpfs system with a non-hardened kernel and then switch to a
+hardened kernel with XATTR_PAX enabled.
+
+The namespace is added to any user with Extended Attribute support
+enabled for tmpfs.  Users who do not enable xattrs will not have
+the XATTR_PAX flags preserved.
+
+diff --git a/include/uapi/linux/xattr.h b/include/uapi/linux/xattr.h
+index 1590c49..5eab462 100644
+--- a/include/uapi/linux/xattr.h
++++ b/include/uapi/linux/xattr.h
+@@ -77,5 +77,9 @@
+ #define XATTR_POSIX_ACL_DEFAULT  "posix_acl_default"
+ #define XATTR_NAME_POSIX_ACL_DEFAULT XATTR_SYSTEM_PREFIX XATTR_POSIX_ACL_DEFAULT
+ 
++/* User namespace */
++#define XATTR_PAX_PREFIX XATTR_USER_PREFIX "pax."
++#define XATTR_PAX_FLAGS_SUFFIX "flags"
++#define XATTR_NAME_PAX_FLAGS XATTR_PAX_PREFIX XATTR_PAX_FLAGS_SUFFIX
+ 
+ #endif /* _UAPI_LINUX_XATTR_H */
+diff --git a/mm/shmem.c b/mm/shmem.c
+index 440e2a7..c377172 100644
+--- a/mm/shmem.c
++++ b/mm/shmem.c
+@@ -3136,6 +3136,14 @@ static int shmem_xattr_handler_set(const struct xattr_handler *handler,
+ 	struct shmem_inode_info *info = SHMEM_I(d_inode(dentry));
+ 
+ 	name = xattr_full_name(handler, name);
++
++	if (!strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN)) {
++		if (strcmp(name, XATTR_NAME_PAX_FLAGS))
++			return -EOPNOTSUPP;
++		if (size > 8)
++			return -EINVAL;
++	}
++
+ 	return simple_xattr_set(&info->xattrs, name, value, size, flags);
+ }
+ 
+@@ -3151,6 +3151,12 @@ static const struct xattr_handler shmem_trusted_xattr_handler = {
+ 	.set = shmem_xattr_handler_set,
+ };
+ 
++static const struct xattr_handler shmem_user_xattr_handler = {
++	.prefix = XATTR_USER_PREFIX,
++	.get = shmem_xattr_handler_get,
++	.set = shmem_xattr_handler_set,
++};
++
+ static const struct xattr_handler *shmem_xattr_handlers[] = {
+ #ifdef CONFIG_TMPFS_POSIX_ACL
+ 	&posix_acl_access_xattr_handler,
+@@ -3158,6 +3158,7 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
+ #endif
+ 	&shmem_security_xattr_handler,
+ 	&shmem_trusted_xattr_handler,
++	&shmem_user_xattr_handler,
+ 	NULL
+ };
+ 
+From: Ben Hutchings <ben@decadent.org.uk>
+Subject: fs: Enable link security restrictions by default
+Date: Fri, 02 Nov 2012 05:32:06 +0000
+Bug-Debian: https://bugs.debian.org/609455
+Forwarded: not-needed
+This reverts commit 561ec64ae67ef25cac8d72bb9c4bfc955edfd415
+('VFS: don't do protected {sym,hard}links by default').
+--- a/fs/namei.c	2018-09-28 07:56:07.770005006 -0400
++++ b/fs/namei.c	2018-09-28 07:56:43.370349204 -0400
+@@ -885,8 +885,8 @@ static inline void put_link(struct namei
+ 		path_put(&last->link);
+ }
+ 
+-int sysctl_protected_symlinks __read_mostly = 0;
+-int sysctl_protected_hardlinks __read_mostly = 0;
++int sysctl_protected_symlinks __read_mostly = 1;
++int sysctl_protected_hardlinks __read_mostly = 1;
+ int sysctl_protected_fifos __read_mostly;
+ int sysctl_protected_regular __read_mostly;
+ 
+--- linux-5.0-rc1/drivers/usb/storage/unusual_uas.h	2019-01-06 19:08:20.000000000 -0600
++++ ../linux-5.0-rc1/drivers/usb/storage/unusual_uas.h	2019-01-07 07:00:05.319817202 -0600
+@@ -87,12 +87,15 @@
+ 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+ 		US_FL_IGNORE_UAS),
+ 
+-/* Reported-by: Takeo Nakayama <javhera@gmx.com> */
++/*
++ * Initially Reported-by: Takeo Nakayama <javhera@gmx.com>
++ * UAS Ignore Reported by Steven Ellis <sellis@redhat.com>
++ */
+ UNUSUAL_DEV(0x357d, 0x7788, 0x0000, 0x9999,
+ 		"JMicron",
+ 		"JMS566",
+ 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
+-		US_FL_NO_REPORT_OPCODES),
++		US_FL_NO_REPORT_OPCODES | US_FL_IGNORE_UAS),
+ 
+ /* Reported-by: Hans de Goede <hdegoede@redhat.com> */
+ UNUSUAL_DEV(0x4971, 0x1012, 0x0000, 0x9999,
+--- linux-5.0-rc1/drivers/hid/hid-apple.c	2019-01-06 19:08:20.000000000 -0600
++++ ../linux-5.0-rc1/drivers/hid/hid-apple.c	2019-01-07 07:10:32.169807519 -0600
+@@ -54,6 +54,22 @@
+ 		"(For people who want to keep Windows PC keyboard muscle memory. "
+ 		"[0] = as-is, Mac layout. 1 = swapped, Windows layout.)");
+ 
++static unsigned int swap_fn_leftctrl;
++module_param(swap_fn_leftctrl, uint, 0644);
++MODULE_PARM_DESC(swap_fn_leftctrl, "Swap the Fn and left Control keys. "
++		"(For people who want to keep PC keyboard muscle memory. "
++		"[0] = as-is, Mac layout, 1 = swapped, PC layout)");
++
++static unsigned int rightalt_as_rightctrl;
++module_param(rightalt_as_rightctrl, uint, 0644);
++MODULE_PARM_DESC(rightalt_as_rightctrl, "Use the right Alt key as a right Ctrl key. "
++		"[0] = as-is, Mac layout. 1 = Right Alt is right Ctrl");
++
++static unsigned int ejectcd_as_delete;
++module_param(ejectcd_as_delete, uint, 0644);
++MODULE_PARM_DESC(ejectcd_as_delete, "Use Eject-CD key as Delete key. "
++		"([0] = disabled, 1 = enabled)");
++
+ struct apple_sc {
+ 	unsigned long quirks;
+ 	unsigned int fn_on;
+@@ -166,6 +182,21 @@
+ 	{ }
+ };
+ 
++static const struct apple_key_translation swapped_fn_leftctrl_keys[] = {
++	{ KEY_FN, KEY_LEFTCTRL },
++	{ }
++};
++
++static const struct apple_key_translation rightalt_as_rightctrl_keys[] = {
++	{ KEY_RIGHTALT, KEY_RIGHTCTRL },
++	{ }
++};
++
++static const struct apple_key_translation ejectcd_as_delete_keys[] = {
++	{ KEY_EJECTCD,	KEY_DELETE },
++	{ }
++};
++
+ static const struct apple_key_translation *apple_find_translation(
+ 		const struct apple_key_translation *table, u16 from)
+ {
+@@ -185,9 +216,11 @@
+ 	struct apple_sc *asc = hid_get_drvdata(hid);
+ 	const struct apple_key_translation *trans, *table;
+ 
+-	if (usage->code == KEY_FN) {
++	u16 fn_keycode = (swap_fn_leftctrl) ? (KEY_LEFTCTRL) : (KEY_FN);
++
++	if (usage->code == fn_keycode) {
+ 		asc->fn_on = !!value;
+-		input_event(input, usage->type, usage->code, value);
++		input_event(input, usage->type, KEY_FN, value);
+ 		return 1;
+ 	}
+ 
+@@ -266,6 +299,30 @@
+ 		}
+ 	}
+ 
++	if (swap_fn_leftctrl) {
++		trans = apple_find_translation(swapped_fn_leftctrl_keys, usage->code);
++		if (trans) {
++			input_event(input, usage->type, trans->to, value);
++			return 1;
++		}
++	}
++
++	if (ejectcd_as_delete) {
++		trans = apple_find_translation(ejectcd_as_delete_keys, usage->code);
++		if (trans) {
++			input_event(input, usage->type, trans->to, value);
++			return 1;
++		}
++	}
++
++	if (rightalt_as_rightctrl) {
++		trans = apple_find_translation(rightalt_as_rightctrl_keys, usage->code);
++		if (trans) {
++			input_event(input, usage->type, trans->to, value);
++			return 1;
++		}
++	}
++
+ 	return 0;
+ }
+ 
+@@ -329,6 +386,21 @@
+ 
+ 	for (trans = apple_iso_keyboard; trans->from; trans++)
+ 		set_bit(trans->to, input->keybit);
++
++	if (swap_fn_leftctrl) {
++		for (trans = swapped_fn_leftctrl_keys; trans->from; trans++)
++			set_bit(trans->to, input->keybit);
++	}
++
++	if (ejectcd_as_delete) {
++		for (trans = ejectcd_as_delete_keys; trans->from; trans++)
++			set_bit(trans->to, input->keybit);
++	}
++
++        if (rightalt_as_rightctrl) {
++		for (trans = rightalt_as_rightctrl_keys; trans->from; trans++)
++			set_bit(trans->to, input->keybit);
++	}
+ }
+ 
+ static int apple_input_mapping(struct hid_device *hdev, struct hid_input *hi,
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/x86/Kconfig.cpu	2019-01-06 19:08:20.000000000 -0600
++++ linux-5.0-rc1/arch/x86/Kconfig.cpu	2019-01-07 08:05:56.099979891 -0600
+@@ -116,6 +116,7 @@
+ config MPENTIUM4
+ 	bool "Pentium-4/Celeron(P4-based)/Pentium-4 M/older Xeon"
+ 	depends on X86_32
++	select X86_P6_NOP
+ 	---help---
+ 	  Select this for Intel Pentium 4 chips.  This includes the
+ 	  Pentium 4, Pentium D, P4-based Celeron and Xeon, and
+@@ -148,9 +149,8 @@
+ 		-Paxville
+ 		-Dempsey
+ 
+-
+ config MK6
+-	bool "K6/K6-II/K6-III"
++	bool "AMD K6/K6-II/K6-III"
+ 	depends on X86_32
+ 	---help---
+ 	  Select this for an AMD K6-family processor.  Enables use of
+@@ -158,7 +158,7 @@
+ 	  flags to GCC.
+ 
+ config MK7
+-	bool "Athlon/Duron/K7"
++	bool "AMD Athlon/Duron/K7"
+ 	depends on X86_32
+ 	---help---
+ 	  Select this for an AMD Athlon K7-family processor.  Enables use of
+@@ -166,12 +166,83 @@
+ 	  flags to GCC.
+ 
+ config MK8
+-	bool "Opteron/Athlon64/Hammer/K8"
++	bool "AMD Opteron/Athlon64/Hammer/K8"
+ 	---help---
+ 	  Select this for an AMD Opteron or Athlon64 Hammer-family processor.
+ 	  Enables use of some extended instructions, and passes appropriate
+ 	  optimization flags to GCC.
+ 
++config MK8SSE3
++	bool "AMD Opteron/Athlon64/Hammer/K8 with SSE3"
++	---help---
++	  Select this for improved AMD Opteron or Athlon64 Hammer-family processors.
++	  Enables use of some extended instructions, and passes appropriate
++	  optimization flags to GCC.
++
++config MK10
++	bool "AMD 61xx/7x50/PhenomX3/X4/II/K10"
++	---help---
++	  Select this for an AMD 61xx Eight-Core Magny-Cours, Athlon X2 7x50,
++		Phenom X3/X4/II, Athlon II X2/X3/X4, or Turion II-family processor.
++	  Enables use of some extended instructions, and passes appropriate
++	  optimization flags to GCC.
++
++config MBARCELONA
++	bool "AMD Barcelona"
++	---help---
++	  Select this for AMD Family 10h Barcelona processors.
++
++	  Enables -march=barcelona
++
++config MBOBCAT
++	bool "AMD Bobcat"
++	---help---
++	  Select this for AMD Family 14h Bobcat processors.
++
++	  Enables -march=btver1
++
++config MJAGUAR
++	bool "AMD Jaguar"
++	---help---
++	  Select this for AMD Family 16h Jaguar processors.
++
++	  Enables -march=btver2
++
++config MBULLDOZER
++	bool "AMD Bulldozer"
++	---help---
++	  Select this for AMD Family 15h Bulldozer processors.
++
++	  Enables -march=bdver1
++
++config MPILEDRIVER
++	bool "AMD Piledriver"
++	---help---
++	  Select this for AMD Family 15h Piledriver processors.
++
++	  Enables -march=bdver2
++
++config MSTEAMROLLER
++	bool "AMD Steamroller"
++	---help---
++	  Select this for AMD Family 15h Steamroller processors.
++
++	  Enables -march=bdver3
++
++config MEXCAVATOR
++	bool "AMD Excavator"
++	---help---
++	  Select this for AMD Family 15h Excavator processors.
++
++	  Enables -march=bdver4
++
++config MZEN
++	bool "AMD Zen"
++	---help---
++	  Select this for AMD Family 17h Zen processors.
++
++	  Enables -march=znver1
++
+ config MCRUSOE
+ 	bool "Crusoe"
+ 	depends on X86_32
+@@ -253,6 +324,7 @@
+ 
+ config MPSC
+ 	bool "Intel P4 / older Netburst based Xeon"
++	select X86_P6_NOP
+ 	depends on X86_64
+ 	---help---
+ 	  Optimize for Intel Pentium 4, Pentium D and older Nocona/Dempsey
+@@ -262,8 +334,19 @@
+ 	  using the cpu family field
+ 	  in /proc/cpuinfo. Family 15 is an older Xeon, Family 6 a newer one.
+ 
++config MATOM
++	bool "Intel Atom"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for the Intel Atom platform. Intel Atom CPUs have an
++	  in-order pipelining architecture and thus can benefit from
++	  accordingly optimized code. Use a recent GCC with specific Atom
++	  support in order to fully benefit from selecting this option.
++
+ config MCORE2
+-	bool "Core 2/newer Xeon"
++	bool "Intel Core 2"
++	select X86_P6_NOP
+ 	---help---
+ 
+ 	  Select this for Intel Core 2 and newer Core 2 Xeons (Xeon 51xx and
+@@ -271,14 +354,88 @@
+ 	  family in /proc/cpuinfo. Newer ones have 6 and older ones 15
+ 	  (not a typo)
+ 
+-config MATOM
+-	bool "Intel Atom"
++	  Enables -march=core2
++
++config MNEHALEM
++	bool "Intel Nehalem"
++	select X86_P6_NOP
+ 	---help---
+ 
+-	  Select this for the Intel Atom platform. Intel Atom CPUs have an
+-	  in-order pipelining architecture and thus can benefit from
+-	  accordingly optimized code. Use a recent GCC with specific Atom
+-	  support in order to fully benefit from selecting this option.
++	  Select this for 1st Gen Core processors in the Nehalem family.
++
++	  Enables -march=nehalem
++
++config MWESTMERE
++	bool "Intel Westmere"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for the Intel Westmere formerly Nehalem-C family.
++
++	  Enables -march=westmere
++
++config MSILVERMONT
++	bool "Intel Silvermont"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for the Intel Silvermont platform.
++
++	  Enables -march=silvermont
++
++config MSANDYBRIDGE
++	bool "Intel Sandy Bridge"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 2nd Gen Core processors in the Sandy Bridge family.
++
++	  Enables -march=sandybridge
++
++config MIVYBRIDGE
++	bool "Intel Ivy Bridge"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 3rd Gen Core processors in the Ivy Bridge family.
++
++	  Enables -march=ivybridge
++
++config MHASWELL
++	bool "Intel Haswell"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 4th Gen Core processors in the Haswell family.
++
++	  Enables -march=haswell
++
++config MBROADWELL
++	bool "Intel Broadwell"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 5th Gen Core processors in the Broadwell family.
++
++	  Enables -march=broadwell
++
++config MSKYLAKE
++	bool "Intel Skylake"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 6th Gen Core processors in the Skylake family.
++
++	  Enables -march=skylake
++
++config MSKYLAKEX
++	bool "Intel Skylake X"
++	select X86_P6_NOP
++	---help---
++
++	  Select this for 6th Gen Core processors in the Skylake X family.
++
++	  Enables -march=skylake-avx512
+ 
+ config GENERIC_CPU
+ 	bool "Generic-x86-64"
+@@ -287,6 +444,19 @@
+ 	  Generic x86-64 CPU.
+ 	  Run equally well on all x86-64 CPUs.
+ 
++config MNATIVE
++ bool "Native optimizations autodetected by GCC"
++ ---help---
++
++   GCC 4.2 and above support -march=native, which automatically detects
++   the optimum settings to use based on your processor. -march=native
++   also detects and applies additional settings beyond -march specific
++   to your CPU, (eg. -msse4). Unless you have a specific reason not to
++   (e.g. distcc cross-compiling), you should probably be using
++   -march=native rather than anything listed below.
++
++   Enables -march=native
++
+ endchoice
+ 
+ config X86_GENERIC
+@@ -311,7 +481,7 @@
+ config X86_L1_CACHE_SHIFT
+ 	int
+ 	default "7" if MPENTIUM4 || MPSC
+-	default "6" if MK7 || MK8 || MPENTIUMM || MCORE2 || MATOM || MVIAC7 || X86_GENERIC || GENERIC_CPU
++	default "6" if MK7 || MK8 || MK8SSE3 || MK10 || MBARCELONA || MBOBCAT || MBULLDOZER || MPILEDRIVER || MSTEAMROLLER || MEXCAVATOR || MZEN || MJAGUAR || MPENTIUMM || MCORE2 || MNEHALEM || MWESTMERE || MSILVERMONT || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MNATIVE || MATOM || MVIAC7 || X86_GENERIC || GENERIC_CPU
+ 	default "4" if MELAN || M486 || MGEODEGX1
+ 	default "5" if MWINCHIP3D || MWINCHIPC6 || MCRUSOE || MEFFICEON || MCYRIXIII || MK6 || MPENTIUMIII || MPENTIUMII || M686 || M586MMX || M586TSC || M586 || MVIAC3_2 || MGEODE_LX
+ 
+@@ -329,35 +499,36 @@
+ 
+ config X86_INTEL_USERCOPY
+ 	def_bool y
+-	depends on MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M586MMX || X86_GENERIC || MK8 || MK7 || MEFFICEON || MCORE2
++	depends on MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M586MMX || X86_GENERIC || MK8 || MK8SSE3 || MK7 || MEFFICEON || MCORE2 || MK10 || MBARCELONA || MNEHALEM || MWESTMERE || MSILVERMONT || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MNATIVE
+ 
+ config X86_USE_PPRO_CHECKSUM
+ 	def_bool y
+-	depends on MWINCHIP3D || MWINCHIPC6 || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MK8 || MVIAC3_2 || MVIAC7 || MEFFICEON || MGEODE_LX || MCORE2 || MATOM
++	depends on MWINCHIP3D || MWINCHIPC6 || MCYRIXIII || MK7 || MK6 || MK10 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MK8 || MK8SSE3 || MVIAC3_2 || MVIAC7 || MEFFICEON || MGEODE_LX || MCORE2 || MNEHALEM || MWESTMERE || MSILVERMONT || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MATOM || MNATIVE
+ 
+ config X86_USE_3DNOW
+ 	def_bool y
+ 	depends on (MCYRIXIII || MK7 || MGEODE_LX) && !UML
+ 
+-#
+-# P6_NOPs are a relatively minor optimization that require a family >=
+-# 6 processor, except that it is broken on certain VIA chips.
+-# Furthermore, AMD chips prefer a totally different sequence of NOPs
+-# (which work on all CPUs).  In addition, it looks like Virtual PC
+-# does not understand them.
+-#
+-# As a result, disallow these if we're not compiling for X86_64 (these
+-# NOPs do work on all x86-64 capable chips); the list of processors in
+-# the right-hand clause are the cores that benefit from this optimization.
+-#
+ config X86_P6_NOP
+-	def_bool y
+-	depends on X86_64
+-	depends on (MCORE2 || MPENTIUM4 || MPSC)
++	default n
++	bool "Support for P6_NOPs on Intel chips"
++	depends on (MCORE2 || MPENTIUM4 || MPSC || MATOM || MNEHALEM || MWESTMERE || MSILVERMONT  || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MNATIVE)
++	---help---
++	P6_NOPs are a relatively minor optimization that require a family >=
++	6 processor, except that it is broken on certain VIA chips.
++	Furthermore, AMD chips prefer a totally different sequence of NOPs
++	(which work on all CPUs).  In addition, it looks like Virtual PC
++	does not understand them.
++
++	As a result, disallow these if we're not compiling for X86_64 (these
++	NOPs do work on all x86-64 capable chips); the list of processors in
++	the right-hand clause are the cores that benefit from this optimization.
++
++	Say Y if you have Intel CPU newer than Pentium Pro, N otherwise.
+ 
+ config X86_TSC
+ 	def_bool y
+-	depends on (MWINCHIP3D || MCRUSOE || MEFFICEON || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || M586MMX || M586TSC || MK8 || MVIAC3_2 || MVIAC7 || MGEODEGX1 || MGEODE_LX || MCORE2 || MATOM) || X86_64
++	depends on (MWINCHIP3D || MCRUSOE || MEFFICEON || MCYRIXIII || MK7 || MK6 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || M586MMX || M586TSC || MK8 || MK8SSE3 || MVIAC3_2 || MVIAC7 || MGEODEGX1 || MGEODE_LX || MCORE2 || MNEHALEM || MWESTMERE || MSILVERMONT || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MNATIVE || MATOM) || X86_64
+ 
+ config X86_CMPXCHG64
+ 	def_bool y
+@@ -367,7 +538,7 @@
+ # generates cmov.
+ config X86_CMOV
+ 	def_bool y
+-	depends on (MK8 || MK7 || MCORE2 || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MVIAC3_2 || MVIAC7 || MCRUSOE || MEFFICEON || X86_64 || MATOM || MGEODE_LX)
++	depends on (MK8 || MK8SSE3 || MK10 || MBARCELONA || MBOBCAT || MBULLDOZER || MPILEDRIVER || MSTEAMROLLER || MEXCAVATOR || MZEN || MJAGUAR || MK7 || MCORE2 || MNEHALEM || MWESTMERE || MSILVERMONT || MSANDYBRIDGE || MIVYBRIDGE || MHASWELL || MBROADWELL || MSKYLAKE || MSKYLAKEX || MPENTIUM4 || MPENTIUMM || MPENTIUMIII || MPENTIUMII || M686 || MVIAC3_2 || MVIAC7 || MCRUSOE || MEFFICEON || X86_64 || MNATIVE || MATOM || MGEODE_LX)
+ 
+ config X86_MINIMUM_CPU_FAMILY
+ 	int
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/x86/Makefile	2019-01-06 19:08:20.000000000 -0600
++++ linux-5.0-rc1/arch/x86/Makefile	2019-01-07 08:05:56.099979891 -0600
+@@ -118,13 +118,42 @@
+ 	KBUILD_CFLAGS += $(call cc-option,-mskip-rax-setup)
+ 
+         # FIXME - should be integrated in Makefile.cpu (Makefile_32.cpu)
++        cflags-$(CONFIG_MNATIVE) += $(call cc-option,-march=native)
+         cflags-$(CONFIG_MK8) += $(call cc-option,-march=k8)
++        cflags-$(CONFIG_MK8SSE3) += $(call cc-option,-march=k8-sse3,-mtune=k8)
++        cflags-$(CONFIG_MK10) += $(call cc-option,-march=amdfam10)
++        cflags-$(CONFIG_MBARCELONA) += $(call cc-option,-march=barcelona)
++        cflags-$(CONFIG_MBOBCAT) += $(call cc-option,-march=btver1)
++        cflags-$(CONFIG_MJAGUAR) += $(call cc-option,-march=btver2)
++        cflags-$(CONFIG_MBULLDOZER) += $(call cc-option,-march=bdver1)
++        cflags-$(CONFIG_MPILEDRIVER) += $(call cc-option,-march=bdver2)
++        cflags-$(CONFIG_MSTEAMROLLER) += $(call cc-option,-march=bdver3)
++        cflags-$(CONFIG_MEXCAVATOR) += $(call cc-option,-march=bdver4)
++        cflags-$(CONFIG_MZEN) += $(call cc-option,-march=znver1)
+         cflags-$(CONFIG_MPSC) += $(call cc-option,-march=nocona)
+ 
+         cflags-$(CONFIG_MCORE2) += \
+-                $(call cc-option,-march=core2,$(call cc-option,-mtune=generic))
+-	cflags-$(CONFIG_MATOM) += $(call cc-option,-march=atom) \
+-		$(call cc-option,-mtune=atom,$(call cc-option,-mtune=generic))
++                $(call cc-option,-march=core2,$(call cc-option,-mtune=core2))
++        cflags-$(CONFIG_MNEHALEM) += \
++                $(call cc-option,-march=nehalem,$(call cc-option,-mtune=nehalem))
++        cflags-$(CONFIG_MWESTMERE) += \
++                $(call cc-option,-march=westmere,$(call cc-option,-mtune=westmere))
++        cflags-$(CONFIG_MSILVERMONT) += \
++                $(call cc-option,-march=silvermont,$(call cc-option,-mtune=silvermont))
++        cflags-$(CONFIG_MSANDYBRIDGE) += \
++                $(call cc-option,-march=sandybridge,$(call cc-option,-mtune=sandybridge))
++        cflags-$(CONFIG_MIVYBRIDGE) += \
++                $(call cc-option,-march=ivybridge,$(call cc-option,-mtune=ivybridge))
++        cflags-$(CONFIG_MHASWELL) += \
++                $(call cc-option,-march=haswell,$(call cc-option,-mtune=haswell))
++        cflags-$(CONFIG_MBROADWELL) += \
++                $(call cc-option,-march=broadwell,$(call cc-option,-mtune=broadwell))
++        cflags-$(CONFIG_MSKYLAKE) += \
++                $(call cc-option,-march=skylake,$(call cc-option,-mtune=skylake))
++        cflags-$(CONFIG_MSKYLAKEX) += \
++                $(call cc-option,-march=skylake-avx512,$(call cc-option,-mtune=skylake-avx512))
++        cflags-$(CONFIG_MATOM) += $(call cc-option,-march=bonnell) \
++                $(call cc-option,-mtune=bonnell,$(call cc-option,-mtune=generic))
+         cflags-$(CONFIG_GENERIC_CPU) += $(call cc-option,-mtune=generic)
+         KBUILD_CFLAGS += $(cflags-y)
+ 
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/x86/Makefile_32.cpu	2019-01-06 19:08:20.000000000 -0600
++++ linux-5.0-rc1/arch/x86/Makefile_32.cpu	2019-01-07 08:05:56.099979891 -0600
+@@ -23,7 +23,18 @@
+ # Please note, that patches that add -march=athlon-xp and friends are pointless.
+ # They make zero difference whatsosever to performance at this time.
+ cflags-$(CONFIG_MK7)		+= -march=athlon
++cflags-$(CONFIG_MNATIVE) += $(call cc-option,-march=native)
+ cflags-$(CONFIG_MK8)		+= $(call cc-option,-march=k8,-march=athlon)
++cflags-$(CONFIG_MK8SSE3)		+= $(call cc-option,-march=k8-sse3,-march=athlon)
++cflags-$(CONFIG_MK10)	+= $(call cc-option,-march=amdfam10,-march=athlon)
++cflags-$(CONFIG_MBARCELONA)	+= $(call cc-option,-march=barcelona,-march=athlon)
++cflags-$(CONFIG_MBOBCAT)	+= $(call cc-option,-march=btver1,-march=athlon)
++cflags-$(CONFIG_MJAGUAR)	+= $(call cc-option,-march=btver2,-march=athlon)
++cflags-$(CONFIG_MBULLDOZER)	+= $(call cc-option,-march=bdver1,-march=athlon)
++cflags-$(CONFIG_MPILEDRIVER)	+= $(call cc-option,-march=bdver2,-march=athlon)
++cflags-$(CONFIG_MSTEAMROLLER)	+= $(call cc-option,-march=bdver3,-march=athlon)
++cflags-$(CONFIG_MEXCAVATOR)	+= $(call cc-option,-march=bdver4,-march=athlon)
++cflags-$(CONFIG_MZEN)	+= $(call cc-option,-march=znver1,-march=athlon)
+ cflags-$(CONFIG_MCRUSOE)	+= -march=i686 -falign-functions=0 -falign-jumps=0 -falign-loops=0
+ cflags-$(CONFIG_MEFFICEON)	+= -march=i686 $(call tune,pentium3) -falign-functions=0 -falign-jumps=0 -falign-loops=0
+ cflags-$(CONFIG_MWINCHIPC6)	+= $(call cc-option,-march=winchip-c6,-march=i586)
+@@ -32,8 +43,17 @@
+ cflags-$(CONFIG_MVIAC3_2)	+= $(call cc-option,-march=c3-2,-march=i686)
+ cflags-$(CONFIG_MVIAC7)		+= -march=i686
+ cflags-$(CONFIG_MCORE2)		+= -march=i686 $(call tune,core2)
+-cflags-$(CONFIG_MATOM)		+= $(call cc-option,-march=atom,$(call cc-option,-march=core2,-march=i686)) \
+-	$(call cc-option,-mtune=atom,$(call cc-option,-mtune=generic))
++cflags-$(CONFIG_MNEHALEM)	+= -march=i686 $(call tune,nehalem)
++cflags-$(CONFIG_MWESTMERE)	+= -march=i686 $(call tune,westmere)
++cflags-$(CONFIG_MSILVERMONT)	+= -march=i686 $(call tune,silvermont)
++cflags-$(CONFIG_MSANDYBRIDGE)	+= -march=i686 $(call tune,sandybridge)
++cflags-$(CONFIG_MIVYBRIDGE)	+= -march=i686 $(call tune,ivybridge)
++cflags-$(CONFIG_MHASWELL)	+= -march=i686 $(call tune,haswell)
++cflags-$(CONFIG_MBROADWELL)	+= -march=i686 $(call tune,broadwell)
++cflags-$(CONFIG_MSKYLAKE)	+= -march=i686 $(call tune,skylake)
++cflags-$(CONFIG_MSKYLAKEX)	+= -march=i686 $(call tune,skylake-avx512)
++cflags-$(CONFIG_MATOM)		+= $(call cc-option,-march=bonnell,$(call cc-option,-march=core2,-march=i686)) \
++	$(call cc-option,-mtune=bonnell,$(call cc-option,-mtune=generic))
+ 
+ # AMD Elan support
+ cflags-$(CONFIG_MELAN)		+= -march=i486
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/x86/include/asm/module.h	2019-01-06 19:08:20.000000000 -0600
++++ linux-5.0-rc1/arch/x86/include/asm/module.h	2019-01-07 08:05:56.099979891 -0600
+@@ -25,6 +25,26 @@
+ #define MODULE_PROC_FAMILY "586MMX "
+ #elif defined CONFIG_MCORE2
+ #define MODULE_PROC_FAMILY "CORE2 "
++#elif defined CONFIG_MNATIVE
++#define MODULE_PROC_FAMILY "NATIVE "
++#elif defined CONFIG_MNEHALEM
++#define MODULE_PROC_FAMILY "NEHALEM "
++#elif defined CONFIG_MWESTMERE
++#define MODULE_PROC_FAMILY "WESTMERE "
++#elif defined CONFIG_MSILVERMONT
++#define MODULE_PROC_FAMILY "SILVERMONT "
++#elif defined CONFIG_MSANDYBRIDGE
++#define MODULE_PROC_FAMILY "SANDYBRIDGE "
++#elif defined CONFIG_MIVYBRIDGE
++#define MODULE_PROC_FAMILY "IVYBRIDGE "
++#elif defined CONFIG_MHASWELL
++#define MODULE_PROC_FAMILY "HASWELL "
++#elif defined CONFIG_MBROADWELL
++#define MODULE_PROC_FAMILY "BROADWELL "
++#elif defined CONFIG_MSKYLAKE
++#define MODULE_PROC_FAMILY "SKYLAKE "
++#elif defined CONFIG_MSKYLAKEX
++#define MODULE_PROC_FAMILY "SKYLAKEX "
+ #elif defined CONFIG_MATOM
+ #define MODULE_PROC_FAMILY "ATOM "
+ #elif defined CONFIG_M686
+@@ -43,6 +63,26 @@
+ #define MODULE_PROC_FAMILY "K7 "
+ #elif defined CONFIG_MK8
+ #define MODULE_PROC_FAMILY "K8 "
++#elif defined CONFIG_MK8SSE3
++#define MODULE_PROC_FAMILY "K8SSE3 "
++#elif defined CONFIG_MK10
++#define MODULE_PROC_FAMILY "K10 "
++#elif defined CONFIG_MBARCELONA
++#define MODULE_PROC_FAMILY "BARCELONA "
++#elif defined CONFIG_MBOBCAT
++#define MODULE_PROC_FAMILY "BOBCAT "
++#elif defined CONFIG_MBULLDOZER
++#define MODULE_PROC_FAMILY "BULLDOZER "
++#elif defined CONFIG_MPILEDRIVER
++#define MODULE_PROC_FAMILY "PILEDRIVER "
++#elif defined CONFIG_MSTEAMROLLER
++#define MODULE_PROC_FAMILY "STEAMROLLER "
++#elif defined CONFIG_MJAGUAR
++#define MODULE_PROC_FAMILY "JAGUAR "
++#elif defined CONFIG_MEXCAVATOR
++#define MODULE_PROC_FAMILY "EXCAVATOR "
++#elif defined CONFIG_MZEN
++#define MODULE_PROC_FAMILY "ZEN "
+ #elif defined CONFIG_MELAN
+ #define MODULE_PROC_FAMILY "ELAN "
+ #elif defined CONFIG_MCRUSOE
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/alpha/Kconfig	2019-01-06 19:08:20.000000000 -0600
++++ linux/arch/alpha/Kconfig	2019-01-07 09:34:53.729996563 -0600
+@@ -495,6 +495,33 @@
+ 
+ 	  If unsure, say N.
+ 
++config ALPHA_UAC_SYSCTL
++       bool "Configure UAC policy via sysctl"
++       depends on SYSCTL
++       default y
++       ---help---
++         Configuring the UAC (unaligned access control) policy on a Linux
++         system usually involves setting a compile time define. If you say
++         Y here, you will be able to modify the UAC policy at runtime using
++         the /proc interface.
++
++         The UAC policy defines the action Linux should take when an
++         unaligned memory access occurs. The action can include printing a
++         warning message (NOPRINT), sending a signal to the offending
++         program to help developers debug their applications (SIGBUS), or
++         disabling the transparent fixing (NOFIX).
++
++         The sysctls will be initialized to the compile-time defined UAC
++         policy. You can change these manually, or with the sysctl(8)
++         userspace utility.
++
++         To disable the warning messages at runtime, you would use
++
++           echo 1 > /proc/sys/kernel/uac/noprint
++
++         This is pretty harmless. Say Y if you're not sure.
++
++
+ 
+ config ALPHA_SRM
+ 	bool "Use SRM as bootloader" if ALPHA_CABRIOLET || ALPHA_AVANTI_CH || ALPHA_EB64P || ALPHA_PC164 || ALPHA_TAKARA || ALPHA_EB164 || ALPHA_ALCOR || ALPHA_MIATA || ALPHA_LX164 || ALPHA_SX164 || ALPHA_NAUTILUS || ALPHA_NONAME
+--- linux-5.0-rc1-master/linux-5.0-rc1/kernel/sysctl.c	2019-01-06 19:08:20.000000000 -0600
++++ linux/kernel/sysctl.c	2019-01-07 09:34:53.729996563 -0600
+@@ -157,6 +157,11 @@
+ #ifdef CONFIG_INOTIFY_USER
+ #include <linux/inotify.h>
+ #endif
++
++#ifdef CONFIG_ALPHA_UAC_SYSCTL
++extern struct ctl_table uac_table[];
++#endif
++
+ #ifdef CONFIG_SPARC
+ #endif
+ 
+@@ -1921,6 +1926,13 @@
+ 		.extra2		= &one,
+ 	},
+ #endif
++#ifdef CONFIG_ALPHA_UAC_SYSCTL
++	{
++	        .procname   = "uac",
++		.mode       = 0555,
++	        .child      = uac_table,
++	 },
++#endif /* CONFIG_ALPHA_UAC_SYSCTL */
+ 	{ }
+ };
+ 
+--- linux-5.0-rc1-master/linux-5.0-rc1/arch/alpha/kernel/traps.c	2019-01-06 19:08:20.000000000 -0600
++++ linux/arch/alpha/kernel/traps.c	2019-01-07 09:34:53.729996563 -0600
+@@ -105,6 +105,49 @@
+ 			   "t10", "t11", "ra", "pv", "at", "gp", "sp", "zero"};
+ #endif
+ 
++#ifdef CONFIG_ALPHA_UAC_SYSCTL
++
++#include <linux/sysctl.h>
++
++static int enabled_noprint = 0;
++static int enabled_sigbus = 0;
++static int enabled_nofix = 0;
++
++struct ctl_table uac_table[] = {
++       {
++               .procname       = "noprint",
++               .data           = &enabled_noprint,
++               .maxlen         = sizeof (int),
++               .mode           = 0644,
++               .proc_handler = &proc_dointvec,
++       },
++       {
++               .procname       = "sigbus",
++               .data           = &enabled_sigbus,
++               .maxlen         = sizeof (int),
++               .mode           = 0644,
++               .proc_handler = &proc_dointvec,
++       },
++       {
++               .procname       = "nofix",
++               .data           = &enabled_nofix,
++               .maxlen         = sizeof (int),
++               .mode           = 0644,
++               .proc_handler = &proc_dointvec,
++       },
++       { }
++};
++
++static int __init init_uac_sysctl(void)
++{
++   /* Initialize sysctls with the #defined UAC policy */
++   enabled_noprint = (test_thread_flag (TS_UAC_NOPRINT)) ? 1 : 0;
++   enabled_sigbus = (test_thread_flag (TS_UAC_SIGBUS)) ? 1 : 0;
++   enabled_nofix = (test_thread_flag (TS_UAC_NOFIX)) ? 1 : 0;
++   return 0;
++}
++#endif
++
+ static void
+ dik_show_code(unsigned int *pc)
+ {
+@@ -732,7 +775,12 @@
+ 	/* Check the UAC bits to decide what the user wants us to do
+ 	   with the unaliged access.  */
+ 
++#ifndef CONFIG_ALPHA_UAC_SYSCTL
+ 	if (!(current_thread_info()->status & TS_UAC_NOPRINT)) {
++#else  /* CONFIG_ALPHA_UAC_SYSCTL */
++	if (!(current_thread_info()->status & TS_UAC_NOPRINT) &&
++	    !(enabled_noprint)) {
++#endif /* CONFIG_ALPHA_UAC_SYSCTL */
+ 		if (__ratelimit(&ratelimit)) {
+ 			printk("%s(%d): unaligned trap at %016lx: %p %lx %ld\n",
+ 			       current->comm, task_pid_nr(current),
+@@ -992,3 +1040,6 @@
+ 	wrent(entSys, 5);
+ 	wrent(entDbg, 6);
+ }
++#ifdef CONFIG_ALPHA_UAC_SYSCTL
++       __initcall(init_uac_sysctl);
++#endif
+--- a/Kconfig	2018-09-28 08:08:05.058882080 -0400
++++ b/Kconfig	2018-09-28 08:09:17.869573745 -0400
+@@ -30,3 +30,5 @@ source "crypto/Kconfig"
+ source "lib/Kconfig"
+ 
+ source "lib/Kconfig.debug"
++
++source "distro/Kconfig"
+--- /dev/null	2017-03-02 01:55:04.096566155 -0500
++++ b/distro/Kconfig	2017-03-02 11:12:05.049448255 -0500
+@@ -0,0 +1,145 @@
++menu "Gentoo Linux"
++
++config GENTOO_LINUX
++	bool "Gentoo Linux support"
++
++	default y
++
++	help
++		In order to boot Gentoo Linux a minimal set of config settings needs to
++		be enabled in the kernel; to avoid the users from having to enable them
++		manually as part of a Gentoo Linux installation or a new clean config,
++		we enable these config settings by default for convenience.
++
++		See the settings that become available for more details and fine-tuning.
++
++config GENTOO_LINUX_UDEV
++	bool "Linux dynamic and persistent device naming (userspace devfs) support"
++
++	depends on GENTOO_LINUX
++	default y if GENTOO_LINUX
++
++	select DEVTMPFS
++	select TMPFS
++	select UNIX
++
++	select MMU
++	select SHMEM
++
++	help
++		In order to boot Gentoo Linux a minimal set of config settings needs to
++		be enabled in the kernel; to avoid the users from having to enable them
++		manually as part of a Gentoo Linux installation or a new clean config,
++		we enable these config settings by default for convenience.
++
++		Currently this only selects TMPFS, DEVTMPFS and their dependencies.
++		TMPFS is enabled to maintain a tmpfs file system at /dev/shm, /run and
++		/sys/fs/cgroup; DEVTMPFS to maintain a devtmpfs file system at /dev.
++
++		Some of these are critical files that need to be available early in the
++		boot process; if not available, it causes sysfs and udev to malfunction.
++
++		To ensure Gentoo Linux boots, it is best to leave this setting enabled;
++		if you run a custom setup, you could consider whether to disable this.
++
++config GENTOO_LINUX_PORTAGE
++	bool "Select options required by Portage features"
++
++	depends on GENTOO_LINUX
++	default y if GENTOO_LINUX
++
++	select CGROUPS
++	select NAMESPACES
++	select IPC_NS
++	select NET_NS
++	select SYSVIPC
++
++	help
++		This enables options required by various Portage FEATURES.
++		Currently this selects:
++
++		CGROUPS     (required for FEATURES=cgroup)
++		IPC_NS      (required for FEATURES=ipc-sandbox)
++		NET_NS      (required for FEATURES=network-sandbox)
++		SYSVIPC     (required by IPC_NS)
++   
++
++		It is highly recommended that you leave this enabled as these FEATURES
++		are, or will soon be, enabled by default.
++
++menu "Support for init systems, system and service managers"
++	visible if GENTOO_LINUX
++
++config GENTOO_LINUX_INIT_SCRIPT
++	bool "OpenRC, runit and other script based systems and managers"
++
++	default y if GENTOO_LINUX
++
++	depends on GENTOO_LINUX
++
++	select BINFMT_SCRIPT
++
++	help
++		The init system is the first thing that loads after the kernel booted.
++
++		These config settings allow you to select which init systems to support;
++		instead of having to select all the individual settings all over the
++		place, these settings allows you to select all the settings at once.
++
++		This particular setting enables all the known requirements for OpenRC,
++		runit and similar script based systems and managers.
++
++		If you are unsure about this, it is best to leave this setting enabled.
++
++config GENTOO_LINUX_INIT_SYSTEMD
++	bool "systemd"
++
++	default n
++
++	depends on GENTOO_LINUX && GENTOO_LINUX_UDEV
++
++	select AUTOFS4_FS
++	select BLK_DEV_BSG
++	select CGROUPS
++	select CHECKPOINT_RESTORE
++	select CRYPTO_HMAC 
++	select CRYPTO_SHA256
++	select CRYPTO_USER_API_HASH
++	select DEVPTS_MULTIPLE_INSTANCES
++	select DMIID if X86_32 || X86_64 || X86
++	select EPOLL
++	select FANOTIFY
++	select FHANDLE
++	select INOTIFY_USER
++	select IPV6
++	select NET
++	select NET_NS
++	select PROC_FS
++	select SECCOMP
++	select SECCOMP_FILTER
++	select SIGNALFD
++	select SYSFS
++	select TIMERFD
++	select TMPFS_POSIX_ACL
++	select TMPFS_XATTR
++
++	select ANON_INODES
++	select BLOCK
++	select EVENTFD
++	select FSNOTIFY
++	select INET
++	select NLATTR
++
++	help
++		The init system is the first thing that loads after the kernel booted.
++
++		These config settings allow you to select which init systems to support;
++		instead of having to select all the individual settings all over the
++		place, these settings allows you to select all the settings at once.
++
++		This particular setting enables all the known requirements for systemd;
++		it also enables suggested optional settings, as the package suggests to.
++
++endmenu
++
++endmenu
