@@ -1,4 +1,4 @@
-## Changed files
+## Patched files
 
 kernel/nvidia/nvlink_link.c\
 kernel/nvidia/os-interface.c\
