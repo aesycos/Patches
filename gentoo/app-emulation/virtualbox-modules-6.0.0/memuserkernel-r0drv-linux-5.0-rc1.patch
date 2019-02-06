@@ -1,0 +1,20 @@
+--- a/vboxdrv/r0drv/linux/memuserkernel-r0drv-linux.c	2019-02-05 21:46:20.568129244 -0600
++++ b/vboxdrv/r0drv/linux/memuserkernel-r0drv-linux.c.new	2019-02-05 21:47:10.928128678 -0600
+@@ -69,7 +69,7 @@
+ RTR0DECL(bool) RTR0MemUserIsValidAddr(RTR3PTR R3Ptr)
+ {
+     IPRT_LINUX_SAVE_EFL_AC();
+-    bool fRc = access_ok(VERIFY_READ, (void *)R3Ptr, 1);
++    bool fRc = access_ok((void *)R3Ptr, 1);
+     IPRT_LINUX_RESTORE_EFL_AC();
+     return fRc;
+ }
+@@ -85,7 +85,7 @@
+     return (uintptr_t)pv >= PAGE_OFFSET;
+ #else
+ # error "PORT ME"
+-    return !access_ok(VERIFY_READ, pv, 1);
++    return !access_ok(pv, 1);
+ #endif
+ }
+ RT_EXPORT_SYMBOL(RTR0MemKernelIsValidAddr);

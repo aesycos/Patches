@@ -1,0 +1,10 @@
+--- a/vboxdrv/r0drv/linux/time-r0drv-linux.c	2019-02-05 21:56:28.888122407 -0600
++++ b/vboxdrv/r0drv/linux/time-r0drv-linux.c.new	2019-02-05 22:06:38.688115554 -0600
+@@ -177,7 +177,7 @@
+ /* On Linux 4.20, time.h includes time64.h and we have to use 64-bit times. */
+ # ifdef _LINUX_TIME64
+     struct timespec64 Ts;
+-    ktime_get_real_ts64(&Ts);
++    Ts.tv_nsec = ktime_get_real_ns();
+ # else
+     struct timespec Ts 
