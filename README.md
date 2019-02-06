@@ -11,5 +11,5 @@ genpatch-5.0.0-rc1.extras.tar.xz
 nvidia-drivers-390.87-kernel-5.0.0-rc1.patch
 
 ## app-emulation/virtualbox-modules
-memuserkernel-r0drv-linux-5.0-rc1.patch
+memuserkernel-r0drv-linux-5.0-rc1.patch\
 time-r0drv-linux-5.0.0-rc1.patch
